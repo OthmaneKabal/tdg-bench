@@ -573,6 +573,7 @@ def _prepare_unified_data(
     strict_coverage: bool = True,
     verify_graph: bool = False,
     no_graph: bool = False,
+    verbose: bool = False,
 ) -> _PreparedUnifiedData:
     manifest = benchmark._store.manifest(dataset)
     resolved_split_seeds = (
@@ -621,6 +622,12 @@ def _prepare_unified_data(
             feature_seed=feature_seed,
             strict_coverage=strict_coverage,
             verify_graph=verify_graph,
+        )
+    if verbose:
+        print(
+            f"Loaded PyG data | {base_bundle.dataset}/{base_bundle.graph}: "
+            f"{base_bundle.data}",
+            flush=True,
         )
     bundles = {
         split_seed: (
@@ -721,6 +728,7 @@ def run_unified_evaluation(
         strict_coverage=strict_coverage,
         verify_graph=verify_graph,
         no_graph=no_graph,
+        verbose=verbose,
     )
     resolved_split_seeds = prepared_data.split_seeds
     metric_names = resolve_metric_names(metrics)
@@ -748,10 +756,10 @@ def run_unified_evaluation(
         "dropout": effective_dropout,
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
-        "training_mode": "full_batch" if no_graph else "neighbor_sampling",
-        "batch_size": 0 if no_graph else batch_size,
+        "training_mode": "stratified_minibatch" if no_graph else "neighbor_sampling",
+        "batch_size": batch_size,
         "num_neighbors": () if no_graph else resolved_num_neighbors,
-        "shuffle": False if no_graph else shuffle,
+        "shuffle": True if no_graph else shuffle,
         "num_workers": 0 if no_graph else num_workers,
         "max_epochs": max_epochs,
         "patience": patience,
@@ -1023,6 +1031,7 @@ def run_unified_suite(
             benchmark,
             dataset=dataset,
             graph=graph,
+            verbose=normalized_kwargs.get("verbose", True),
             **preparation_kwargs,
         )
         if any(label != "MLP" for label in labels)
@@ -1034,6 +1043,7 @@ def run_unified_suite(
             dataset=dataset,
             graph=None,
             no_graph=True,
+            verbose=normalized_kwargs.get("verbose", True),
             **preparation_kwargs,
         )
         if "MLP" in labels

@@ -17,8 +17,16 @@ for two domains: **Biomedical** and **DBpedia**.
 
 ## Installation
 
+CPU:
+
 ```bash
-pip install tdg-bench
+pip install tdg-bench torch==2.5.1 torch_geometric==2.6.1 torch_scatter==2.1.2 torch_sparse==0.6.18 --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --find-links https://data.pyg.org/whl/torch-2.5.0+cpu.html
+```
+
+NVIDIA GPU (CUDA 12.4):
+
+```bash
+pip install tdg-bench torch==2.5.1 torch_geometric==2.6.1 torch_scatter==2.1.2 torch_sparse==0.6.18 --index-url https://download.pytorch.org/whl/cu124 --extra-index-url https://pypi.org/simple --find-links https://data.pyg.org/whl/torch-2.5.0+cu124.html
 ```
 
 ## I. Knowledge graph construction methods

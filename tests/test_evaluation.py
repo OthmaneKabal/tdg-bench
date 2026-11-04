@@ -128,13 +128,14 @@ def test_every_builtin_model_supports_neighbor_sampled_batches(model_name) -> No
 
 
 @pytest.mark.gnn
-def test_mlp_uses_full_batch_and_ignores_edges() -> None:
+def test_mlp_uses_stratified_minibatches_and_ignores_edges() -> None:
     bundle = tiny_bundle()
     bundle.label_names = ("class-0", "class-1")
     result = evaluate_bundle(
         bundle,
         "MLP",
         hidden_dim=8,
+        batch_size=2,
         max_epochs=2,
         patience=1,
         random_seed=13,
@@ -143,9 +144,10 @@ def test_mlp_uses_full_batch_and_ignores_edges() -> None:
     )
     assert result.model == "MLP"
     assert result.graph == "no_graph"
-    assert result.training_mode == "full_batch"
-    assert result.batch_size == 0
+    assert result.training_mode == "stratified_minibatch"
+    assert result.batch_size == 2
     assert result.num_neighbors == ()
+    assert result.shuffle is True
     assert len(result.history) == result.epochs_ran
 
 

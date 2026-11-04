@@ -97,10 +97,11 @@ def test_get_no_graph_data_reads_only_gold_standard_and_split(tmp_path: Path) ->
 
 
 @pytest.mark.gnn
-def test_evaluate_mlp_requires_no_graph(tmp_path: Path) -> None:
+def test_evaluate_mlp_ignores_graph_argument(tmp_path: Path) -> None:
     bench = TDGBench(make_dataset(tmp_path))
     result = bench.evaluate(
         "example",
+        "tdg",
         model="MLP",
         feature_dim=8,
         hidden_dim=8,
@@ -110,10 +111,7 @@ def test_evaluate_mlp_requires_no_graph(tmp_path: Path) -> None:
     )
     assert result.model == "MLP"
     assert result.graph == "no_graph"
-    assert result.training_mode == "full_batch"
-
-    with pytest.raises(ValueError, match="does not accept a graph"):
-        bench.evaluate("example", "tdg", model="MLP")
+    assert result.training_mode == "stratified_minibatch"
 
 
 @pytest.mark.gnn
@@ -138,7 +136,7 @@ def test_unified_mlp_uses_common_nodes_without_graph(tmp_path: Path) -> None:
 
     assert result.graph == "no_graph"
     assert result.model == "MLP"
-    assert result.runs[0].training_mode == "full_batch"
+    assert result.runs[0].training_mode == "stratified_minibatch"
     assert result.runs[0].num_neighbors == ()
 
 
@@ -164,7 +162,7 @@ def test_unified_suite_combines_graph_model_and_no_graph_mlp(tmp_path: Path) -> 
     assert suite.graph == "tdg"
     assert suite.results["GCN"].runs[0].training_mode == "neighbor_sampling"
     assert suite.results["MLP"].graph == "no_graph"
-    assert suite.results["MLP"].runs[0].training_mode == "full_batch"
+    assert suite.results["MLP"].runs[0].training_mode == "stratified_minibatch"
 
 
 @pytest.mark.gnn

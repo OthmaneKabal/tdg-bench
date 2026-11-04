@@ -451,8 +451,6 @@ class TDGBench:
         """Train and evaluate one built-in or custom model on one fixed split."""
         no_graph = isinstance(model, str) and model == "MLP"
         if no_graph:
-            if graph is not None or graph_path is not None or graph_name is not None:
-                raise ValueError("model='MLP' does not accept a graph")
             if options is not None and tuple(options):
                 raise ValueError("model='MLP' does not accept graph preprocessing options")
             bundle = self.get_no_graph_data(
@@ -486,6 +484,11 @@ class TDGBench:
                 feature_seed=feature_seed,
                 strict_coverage=strict_coverage,
                 verify_graph=verify_graph,
+            )
+        if verbose:
+            print(
+                f"Loaded PyG data | {bundle.dataset}/{bundle.graph}: {bundle.data}",
+                flush=True,
             )
         from tdg_bench.evaluation import evaluate_bundle
 
@@ -547,8 +550,6 @@ class TDGBench:
             self._store.ensure_asset(manifest.splits[split_seed])
 
         no_graph = isinstance(model, str) and model == "MLP"
-        if no_graph and graph is not None:
-            raise ValueError("model='MLP' does not accept a graph")
         data_loader = self.get_no_graph_data if no_graph else self.get_data
         data_parameter_names = set(inspect.signature(data_loader).parameters)
         data_parameter_names -= {"self", "dataset", "graph", "split_seed", "random_seed"}
@@ -573,6 +574,12 @@ class TDGBench:
                 **data_kwargs,
             )
         )
+        if evaluation_kwargs.get("verbose", False):
+            print(
+                f"Loaded PyG data | {base_bundle.dataset}/{base_bundle.graph}: "
+                f"{base_bundle.data}",
+                flush=True,
+            )
 
         from tdg_bench.evaluation import aggregate_results, evaluate_bundle
         from tdg_bench.data_preparation import replace_bundle_split

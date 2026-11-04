@@ -303,8 +303,9 @@ def _build_loaders(
         or torch_geometric.typing.WITH_TORCH_SPARSE
     ):
         raise OptionalDependencyError(
-            "Mini-batch neighbor sampling requires a PyTorch-compatible "
-            "installation of either 'pyg-lib' or 'torch-sparse'."
+            "Mini-batch neighbor sampling requires either 'pyg-lib' or "
+            "PyTorch-compatible installations of both 'torch-scatter' and "
+            "'torch-sparse'. Restart the Python kernel after installing them."
         )
     common = {
         "num_neighbors": list(num_neighbors),
@@ -444,6 +445,7 @@ def _evaluate_no_graph_mlp(
     dropout: float,
     learning_rate: float,
     weight_decay: float,
+    batch_size: int,
     max_epochs: int,
     patience: int,
     min_delta: float,
@@ -457,7 +459,7 @@ def _evaluate_no_graph_mlp(
     verbose: bool,
     log_every: int,
 ) -> EvaluationResult:
-    """Train the historical feature-only MLP without graph sampling."""
+    """Train the historical feature-only MLP with stratified mini-batches."""
     _set_random_seed(random_seed)
     resolved_device = _resolve_device(device)
     network, model_name = _prepare_model(
@@ -477,16 +479,78 @@ def _evaluate_no_graph_mlp(
 
     def evaluate_mask(mask, names: tuple[str, ...]) -> ClassificationMetrics:
         network.eval()
+        indices = mask.nonzero(as_tuple=False).view(-1)
+        logits_parts: list[torch.Tensor] = []
+        label_parts: list[torch.Tensor] = []
         with torch.no_grad():
-            logits = network(data.x)
+            for start in range(0, indices.numel(), batch_size):
+                batch_indices = indices[start : start + batch_size]
+                logits_parts.append(network(data.x[batch_indices]))
+                label_parts.append(data.y[batch_indices])
+        logits = torch.cat(logits_parts, dim=0)
+        labels = torch.cat(label_parts, dim=0)
         return _metrics(
             logits,
-            data.y,
-            mask,
+            labels,
+            torch.ones(labels.size(0), dtype=torch.bool, device=labels.device),
             metric_names=names,
             label_names=label_names,
             class_wise=class_wise,
         )
+
+    def stratified_batches(epoch: int) -> list[torch.Tensor]:
+        train_indices = data.train_mask.nonzero(as_tuple=False).view(-1).cpu()
+        train_labels = data.y[train_indices.to(data.y.device)].detach().cpu()
+        generator = torch.Generator(device="cpu").manual_seed(random_seed + epoch - 1)
+        queues: dict[int, torch.Tensor] = {}
+        offsets: dict[int, int] = {}
+        for class_id in sorted(int(value) for value in train_labels.unique().tolist()):
+            class_indices = train_indices[train_labels == class_id]
+            queues[class_id] = class_indices[
+                torch.randperm(class_indices.numel(), generator=generator)
+            ]
+            offsets[class_id] = 0
+
+        batches: list[torch.Tensor] = []
+        remaining_total = int(train_indices.numel())
+        while remaining_total:
+            current_size = min(batch_size, remaining_total)
+            remaining = {
+                class_id: int(indices.numel()) - offsets[class_id]
+                for class_id, indices in queues.items()
+            }
+            ideals = {
+                class_id: current_size * count / remaining_total
+                for class_id, count in remaining.items()
+            }
+            allocations = {
+                class_id: min(count, math.floor(ideals[class_id]))
+                for class_id, count in remaining.items()
+            }
+            missing = current_size - sum(allocations.values())
+            while missing:
+                candidates = [
+                    class_id
+                    for class_id, count in remaining.items()
+                    if allocations[class_id] < count
+                ]
+                class_id = max(
+                    candidates,
+                    key=lambda value: (ideals[value] - allocations[value], -value),
+                )
+                allocations[class_id] += 1
+                missing -= 1
+
+            parts = []
+            for class_id, count in allocations.items():
+                start = offsets[class_id]
+                parts.append(queues[class_id][start : start + count])
+                offsets[class_id] += count
+            batch = torch.cat(parts)
+            batch = batch[torch.randperm(batch.numel(), generator=generator)]
+            batches.append(batch.to(resolved_device))
+            remaining_total -= current_size
+        return batches
 
     lower_is_better = selection_metric == "log_loss"
     best_score = math.inf if lower_is_better else -math.inf
@@ -499,17 +563,24 @@ def _evaluate_no_graph_mlp(
         print(
             f"Training MLP | dataset={bundle.dataset} | graph=none | "
             f"split={bundle.split_seed} | device={resolved_device} | "
-            f"features={getattr(bundle, 'initial_embedding_model', None) or 'random'}",
+            f"features={getattr(bundle, 'initial_embedding_model', None) or 'random'} | "
+            f"batch_size={batch_size} | stratified=True",
             flush=True,
         )
     for epoch in range(1, max_epochs + 1):
         network.train()
-        optimizer.zero_grad(set_to_none=True)
-        logits = network(data.x)
-        loss = F.cross_entropy(logits[data.train_mask], data.y[data.train_mask])
-        loss.backward()
-        optimizer.step()
-        train_loss = float(loss.detach())
+        epoch_loss = 0.0
+        trained_nodes = 0
+        for batch_indices in stratified_batches(epoch):
+            optimizer.zero_grad(set_to_none=True)
+            logits = network(data.x[batch_indices])
+            loss = F.cross_entropy(logits, data.y[batch_indices])
+            loss.backward()
+            optimizer.step()
+            batch_nodes = int(batch_indices.numel())
+            epoch_loss += float(loss.detach()) * batch_nodes
+            trained_nodes += batch_nodes
+        train_loss = epoch_loss / trained_nodes
         train_at_epoch = (
             evaluate_mask(data.train_mask, metric_names) if track_training else None
         )
@@ -586,10 +657,10 @@ def _evaluate_no_graph_mlp(
         metric_names=metric_names,
         selection_metric=selection_metric,
         class_wise=class_wise,
-        training_mode="full_batch",
-        batch_size=0,
+        training_mode="stratified_minibatch",
+        batch_size=batch_size,
         num_neighbors=(),
-        shuffle=False,
+        shuffle=True,
         track_training=track_training,
         train=train_metrics,
         validation=validation_metrics,
@@ -638,7 +709,7 @@ def evaluate_bundle(
     if learning_rate <= 0:
         raise ValueError("learning_rate must be > 0")
     no_graph_mlp = isinstance(model, str) and model == "MLP"
-    if not no_graph_mlp and batch_size < 1:
+    if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
     if num_workers < 0:
         raise ValueError("num_workers must be >= 0")
@@ -654,6 +725,7 @@ def evaluate_bundle(
             dropout=dropout,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
+            batch_size=batch_size,
             max_epochs=max_epochs,
             patience=patience,
             min_delta=min_delta,
