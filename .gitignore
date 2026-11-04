@@ -1,0 +1,14 @@
+# Local benchmark datasets are large and are never committed.
+/benchmark_data/
+/benchmark_data_private/
+/tdgbench_results/
+/hf_dataset_v*/
+
+# Python build and test artefacts.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.test-tmp-*/
+build/
+dist/
