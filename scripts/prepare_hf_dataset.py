@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_ROOT = PROJECT_ROOT / "benchmark_data"
 ASSETS_ROOT = PROJECT_ROOT / "hf_dataset_assets"
 DATASETS = ("biomed", "dbpedia")
-RELEASE_VERSION = "1.0.0"
+RELEASE_VERSION = "2.0.0"
 
 
 def sha256(path: Path) -> str:

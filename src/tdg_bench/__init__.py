@@ -9,5 +9,5 @@ __all__ = [
     "TDGBench",
     "check_new_graph",
 ]
-__version__ = "0.1.0"
+__version__ = "2.0.0rc1"
 

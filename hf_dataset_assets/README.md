@@ -69,7 +69,11 @@ byte-size and SHA-256 checks.
 The companion Python library is maintained at
 [OthmaneKabal/tdg-bench](https://github.com/OthmaneKabal/tdg-bench). It loads
 these artifacts, validates their checksums, applies the fixed splits and runs
-the unified GNN evaluation protocol.
+the unified graph-construction, no-graph MLP and GNN evaluation protocols.
+
+```bash
+pip install tdg-bench
+```
 
 ## Important UMLS restriction
 
@@ -79,5 +83,6 @@ be reconstructed locally by users holding a valid UMLS licence. See
 
 ## Release
 
-This directory is the data payload for TDGBench `v1.0.0`. Consumers should pin
-the Hugging Face revision tag rather than an unversioned branch.
+This directory is the data payload for TDGBench `v2.0.0`, extending the
+Biomedical benchmark from `v1.0.0` with the DBpedia-174 domain. Consumers
+should pin the Hugging Face revision tag rather than an unversioned branch.

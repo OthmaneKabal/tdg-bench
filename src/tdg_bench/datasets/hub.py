@@ -19,7 +19,7 @@ from tdg_bench.exceptions import (
 
 
 DEFAULT_REPO_ID = "othmanekabal/TDGBench"
-DEFAULT_REVISION = "v1.0.0"
+DEFAULT_REVISION = "v2.0.0"
 _SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
