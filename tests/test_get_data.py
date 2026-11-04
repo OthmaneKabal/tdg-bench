@@ -163,6 +163,8 @@ def test_unified_suite_combines_graph_model_and_no_graph_mlp(tmp_path: Path) -> 
     assert suite.results["GCN"].runs[0].training_mode == "neighbor_sampling"
     assert suite.results["MLP"].graph == "no_graph"
     assert suite.results["MLP"].runs[0].training_mode == "stratified_minibatch"
+    assert set(suite.best_results()["architecture"]) == {"GCN", "MLP"}
+    assert set(suite.aggregate_final_results()["architecture"]) == {"GCN", "MLP"}
 
 
 @pytest.mark.gnn

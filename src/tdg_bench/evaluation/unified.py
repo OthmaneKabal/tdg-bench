@@ -112,6 +112,14 @@ class UnifiedEvaluationResult:
     def training_history_dataframe(self):
         return _dataframe(_training_history_rows(self))
 
+    def aggregate_final_results(self, *, all_hidden: bool = False):
+        """Return aggregated metrics with split and training-seed variability."""
+        return _dataframe(_aggregate_final_rows(self, all_hidden=all_hidden))
+
+    def best_results(self, *, selection_metric: str = "f1_macro"):
+        """Return the best validation-selected configuration for this model."""
+        return _dataframe([_best_result_row(self, selection_metric)])
+
 
 @dataclass(frozen=True)
 class UnifiedEvaluationSuite:
@@ -151,6 +159,28 @@ class UnifiedEvaluationSuite:
             for model, evaluation in self.results.items()
         }
         return result
+
+    def aggregate_final_results(self, *, all_hidden: bool = False):
+        """Return aggregated metrics for every architecture in the suite."""
+        rows = []
+        for model, evaluation in self.results.items():
+            for row in _aggregate_final_rows(evaluation, all_hidden=all_hidden):
+                rows.append({"architecture": model, **row})
+        return _dataframe(rows)
+
+    def best_results(self, *, selection_metric: str = "f1_macro"):
+        """Rank architectures using validation only and report their test metrics."""
+        metric = normalize_metric_name(selection_metric)
+        rows = [
+            _best_result_row(evaluation, metric)
+            for evaluation in self.results.values()
+        ]
+        reverse = metric != "log_loss"
+        rows.sort(key=lambda row: row["validation_selection_mean"], reverse=reverse)
+        for rank, row in enumerate(rows, start=1):
+            row["rank"] = rank
+            row["is_best_architecture"] = rank == 1
+        return _dataframe(rows)
 
 
 def _dataframe(rows: list[dict[str, Any]]):
@@ -225,6 +255,67 @@ def _summary_rows(result: UnifiedEvaluationResult) -> list[dict[str, Any]]:
 
 def _summary_dataframe(result: UnifiedEvaluationResult):
     return _dataframe(_summary_rows(result))
+
+
+def _aggregate_final_rows(
+    result: UnifiedEvaluationResult, *, all_hidden: bool = False
+) -> list[dict[str, Any]]:
+    rows = _summary_rows(result)
+    if not all_hidden:
+        rows = [
+            row for row in rows
+            if row["hidden_dim"] == result.selected_hidden_dim
+        ]
+    return rows
+
+
+def _best_hidden_for_metric(
+    result: UnifiedEvaluationResult, selection_metric: str
+) -> int:
+    metric = normalize_metric_name(selection_metric)
+    missing = [
+        hidden_dim
+        for hidden_dim, summary in result.by_hidden_dim.items()
+        if metric not in summary.validation
+    ]
+    if missing:
+        raise ValueError(
+            f"Metric {metric!r} was not evaluated for hidden dimensions {missing}. "
+            "Run unified_evaluation(metrics='all') first."
+        )
+    scores = {
+        hidden_dim: summary.validation[metric].mean
+        for hidden_dim, summary in result.by_hidden_dim.items()
+    }
+    if metric == "log_loss":
+        return min(scores, key=lambda hidden_dim: (scores[hidden_dim], hidden_dim))
+    return max(scores, key=lambda hidden_dim: (scores[hidden_dim], -hidden_dim))
+
+
+def _best_result_row(
+    result: UnifiedEvaluationResult, selection_metric: str = "f1_macro"
+) -> dict[str, Any]:
+    metric = normalize_metric_name(selection_metric)
+    hidden_dim = _best_hidden_for_metric(result, metric)
+    summary = result.by_hidden_dim[hidden_dim]
+    row: dict[str, Any] = {
+        "dataset": result.dataset,
+        "graph": result.graph,
+        "architecture": result.model,
+        "initial_embedding_model": result.initial_embedding_model or "random",
+        "selection_metric": metric,
+        "best_hidden_dim": hidden_dim,
+        "validation_selection_mean": summary.validation[metric].mean,
+        "validation_selection_std_split": summary.validation[metric].std_split,
+        "validation_selection_std_seed": summary.validation[metric].std_seed,
+    }
+    for metric_name, metric_summary in sorted(summary.test.items()):
+        prefix = f"test_{metric_name}"
+        row[f"{prefix}_mean"] = metric_summary.mean
+        row[f"{prefix}_std_split"] = metric_summary.std_split
+        row[f"{prefix}_std_seed"] = metric_summary.std_seed
+        row[f"{prefix}_std_total"] = metric_summary.std_total
+    return row
 
 
 def _class_metric_rows(result: UnifiedEvaluationResult) -> list[dict[str, Any]]:
@@ -685,7 +776,7 @@ def run_unified_evaluation(
     verify_graph: bool = False,
     model_kwargs: Mapping[str, Any] | None = None,
     verbose: bool = True,
-    epoch_verbose: bool = False,
+    epoch_verbose: bool = True,
     log_every: int = 10,
     persist: bool = True,
     resume: bool = True,
@@ -949,6 +1040,26 @@ def run_unified_evaluation(
                 "std_seed", "std_total", "n_runs",
             ),
         )
+        final_rows = _aggregate_final_rows(result, all_hidden=False)
+        best_rows = [_best_result_row(result)]
+        _atomic_json_write(export_dir / "final_results.json", final_rows)
+        _atomic_csv_write(
+            export_dir / "final_results.csv",
+            final_rows,
+            fallback_fields=(
+                "dataset", "graph", "model", "hidden_dim", "partition",
+                "metric", "mean", "std_split", "std_seed", "std_total",
+            ),
+        )
+        _atomic_json_write(export_dir / "best_results.json", best_rows)
+        _atomic_csv_write(
+            export_dir / "best_results.csv",
+            best_rows,
+            fallback_fields=(
+                "dataset", "graph", "architecture", "selection_metric",
+                "best_hidden_dim", "validation_selection_mean",
+            ),
+        )
         _atomic_csv_write(
             export_dir / "class_metrics.csv",
             _class_metric_rows(result),
@@ -1114,12 +1225,39 @@ def run_unified_suite(
                 for label, result in results.items()
             },
         }
-        summary_path = (
+        suite_fingerprint = _fingerprint(suite_protocol)[:16]
+        suite_root = (
             suite.results_dir
             / _slug(dataset)
             / _slug(first.graph)
             / _slug(first.initial_embedding_model or "random")
-            / f"unified_suite_summary-{_fingerprint(suite_protocol)[:16]}.json"
         )
+        summary_path = suite_root / f"unified_suite_summary-{suite_fingerprint}.json"
         _atomic_json_write(summary_path, suite.summary_dict())
+        suite_export_dir = suite_root / f"suite_{suite_fingerprint}"
+        final_rows = []
+        for label, evaluation in suite.results.items():
+            final_rows.extend(
+                {"architecture": label, **row}
+                for row in _aggregate_final_rows(evaluation, all_hidden=False)
+            )
+        best_rows = suite.best_results().to_dict(orient="records")
+        _atomic_json_write(suite_export_dir / "final_results.json", final_rows)
+        _atomic_csv_write(
+            suite_export_dir / "final_results.csv",
+            final_rows,
+            fallback_fields=(
+                "architecture", "dataset", "graph", "hidden_dim", "partition",
+                "metric", "mean", "std_split", "std_seed", "std_total",
+            ),
+        )
+        _atomic_json_write(suite_export_dir / "best_results.json", best_rows)
+        _atomic_csv_write(
+            suite_export_dir / "best_results.csv",
+            best_rows,
+            fallback_fields=(
+                "rank", "architecture", "best_hidden_dim",
+                "validation_selection_mean", "is_best_architecture",
+            ),
+        )
     return suite

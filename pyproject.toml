@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tdg-bench"
-version = "2.0.0rc4"
+version = "2.0.0rc5"
 description = "Evaluate text-driven knowledge graphs and GNNs on reproducible benchmark datasets."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

@@ -88,7 +88,9 @@ def test_evaluate_builtin_model_and_aggregate(capsys) -> None:
     assert first.history[0].train_accuracy is not None
     assert first.history[0].train_values is not None
     assert second.history == ()
-    assert "val_macro_f1=" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "train_f1_macro=" in output
+    assert "val_f1_macro=" in output
 
 
 @pytest.mark.gnn

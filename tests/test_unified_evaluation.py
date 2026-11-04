@@ -99,8 +99,21 @@ def test_unified_evaluation_resumes_completed_runs(tmp_path) -> None:
     assert (first.export_dir / "protocol.json").is_file()
     assert (first.export_dir / "runs.csv").is_file()
     assert (first.export_dir / "summary.csv").is_file()
+    assert (first.export_dir / "final_results.csv").is_file()
+    assert (first.export_dir / "final_results.json").is_file()
+    assert (first.export_dir / "best_results.csv").is_file()
+    assert (first.export_dir / "best_results.json").is_file()
     assert (first.export_dir / "class_metrics.csv").is_file()
     assert (first.export_dir / "confusion_matrices.json").is_file()
     history_path = first.export_dir / "training_history.csv"
     assert history_path.is_file()
     assert "train_loss" in history_path.read_text(encoding="utf-8")
+
+    final_results = first.aggregate_final_results()
+    assert set(final_results["hidden_dim"]) == {first.selected_hidden_dim}
+    assert {"mean", "std_split", "std_seed", "std_total"}.issubset(
+        final_results.columns
+    )
+    best_results = first.best_results()
+    assert best_results.loc[0, "selection_metric"] == "f1_macro"
+    assert best_results.loc[0, "best_hidden_dim"] == first.selected_hidden_dim

@@ -627,10 +627,14 @@ def _evaluate_no_graph_mlp(
             stale_epochs += 1
         stopping = stale_epochs >= patience
         if verbose and (epoch == 1 or epoch % log_every == 0 or stopping):
+            if train_at_epoch is None:
+                train_at_epoch = evaluate_mask(data.train_mask, (selection_metric,))
             print(
                 f"epoch={epoch:03d} | train_loss={train_loss:.4f} | "
                 f"val_loss={validation.loss:.4f} | "
-                f"val_macro_f1={validation.macro_f1:.4f} | "
+                f"train_{selection_metric}="
+                f"{train_at_epoch.values[selection_metric]:.4f} | "
+                f"val_{selection_metric}={selection_score:.4f} | "
                 f"stale={stale_epochs}/{patience}",
                 flush=True,
             )
@@ -857,12 +861,23 @@ def evaluate_bundle(
             stale_epochs += 1
         stopping = stale_epochs >= patience
         if verbose and (epoch == 1 or epoch % log_every == 0 or stopping):
+            if train_at_epoch is None:
+                train_at_epoch = _evaluate_loader(
+                    network,
+                    loaders["train"],
+                    device=resolved_device,
+                    num_classes=int(data.num_classes),
+                    metric_names=(selection_metric,),
+                    label_names=label_names,
+                    class_wise=False,
+                )
             marker = " *" if improved else ""
             print(
                 f"epoch={epoch:03d} | train_loss={epoch_train_loss:.4f} | "
-                f"val_loss={validation.loss:.4f} | val_acc={validation.accuracy:.4f} | "
-                f"val_macro_f1={validation.macro_f1:.4f} | "
-                f"{selection_metric}={selection_score:.4f} | "
+                f"val_loss={validation.loss:.4f} | "
+                f"train_{selection_metric}="
+                f"{train_at_epoch.values[selection_metric]:.4f} | "
+                f"val_{selection_metric}={selection_score:.4f} | "
                 f"stale={stale_epochs}/{patience}{marker}",
                 flush=True,
             )
