@@ -1,10 +1,17 @@
-"""Lazy builders for the seven TDGBench encoder architectures."""
+"""Lazy builders for the built-in TDGBench baseline architectures."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from tdg_bench.models.registry import register_model
+
+
+@register_model("MLP")
+def build_mlp(**kwargs: Any):
+    from tdg_bench.models.encoders import NoGraphMLP
+
+    return NoGraphMLP(**kwargs)
 
 
 @register_model("GCN")

@@ -152,11 +152,12 @@ def _iter_delimited(path: Path, *, delimiter: str) -> Iterator[dict[str, Any]]:
 def _iter_xlsx(path: Path) -> Iterator[dict[str, Any]]:
     try:
         from openpyxl import load_workbook
-    except ImportError as exc:  # pragma: no cover - optional dependency guard
+    except ImportError as exc:  # pragma: no cover - broken installation guard
         from tdg_bench.exceptions import OptionalDependencyError
 
         raise OptionalDependencyError(
-            "Reading .xlsx graphs requires openpyxl. Install tdg-bench[gnn]."
+            "Reading .xlsx graphs requires openpyxl. "
+            "Reinstall with: pip install --upgrade tdg-bench"
         ) from exc
 
     workbook = load_workbook(path, read_only=True, data_only=True)

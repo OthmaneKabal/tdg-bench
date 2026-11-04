@@ -24,11 +24,12 @@ try:
         roc_auc_score,
     )
     from sklearn.preprocessing import label_binarize
-except ImportError as exc:  # pragma: no cover - optional dependency guard
+except ImportError as exc:  # pragma: no cover - broken installation guard
     from tdg_bench.exceptions import OptionalDependencyError
 
     raise OptionalDependencyError(
-        "Evaluation metrics require scikit-learn. Install: pip install 'tdg-bench[gnn]'"
+        "Evaluation metrics require scikit-learn. "
+        "Reinstall with: pip install --upgrade tdg-bench"
     ) from exc
 
 

@@ -20,10 +20,20 @@ classifiers = [
 ]
 dependencies = [
   "huggingface-hub>=0.26,<2",
+  "mysql-connector-python>=9",
+  "numpy>=1.26",
+  "openpyxl>=3.1",
+  "pandas>=2",
   "platformdirs>=4",
+  "scikit-learn>=1.3",
+  "sentence-transformers>=3",
+  "torch>=2.2",
+  "torch-geometric>=2.5",
+  "typing-extensions>=4.12",
 ]
 
 [project.urls]
+Homepage = "https://github.com/OthmaneKabal/tdg-bench"
 Repository = "https://github.com/OthmaneKabal/tdg-bench"
 Documentation = "https://github.com/OthmaneKabal/tdg-bench#readme"
 Issues = "https://github.com/OthmaneKabal/tdg-bench/issues"
@@ -35,22 +45,6 @@ dev = [
 ]
 notebook = [
   "jupyterlab>=4",
-  "openpyxl>=3.1",
-  "pandas>=2",
-]
-gnn = [
-  "openpyxl>=3.1",
-  "scikit-learn>=1.3",
-  "torch>=2.2",
-  "torch-geometric>=2.5",
-  "typing-extensions>=4.12",
-]
-sentence-bert = [
-  "sentence-transformers>=3",
-]
-umls = [
-  "mysql-connector-python>=9",
-  "numpy>=1.26",
 ]
 
 [tool.setuptools.packages.find]

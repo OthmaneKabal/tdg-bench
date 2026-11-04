@@ -716,7 +716,7 @@ def connect_mysql(config: DatabaseConfig):
     except ImportError as exc:
         raise RuntimeError(
             "mysql-connector-python is required for UMLS extraction. "
-            "Install it with: pip install mysql-connector-python"
+            "Reinstall it with: pip install --upgrade tdg-bench"
         ) from exc
 
     return mysql.connector.connect(

@@ -9,7 +9,7 @@ from tdg_bench.models import available_model_names, build_model
 from tdg_bench.models.encoders import NodeClassifier
 
 
-EXPECTED_MODELS = (
+GRAPH_MODELS = (
     "GCN",
     "GAT",
     "RGCN",
@@ -18,6 +18,7 @@ EXPECTED_MODELS = (
     "RotatEGCN_conv",
     "RotatEGCN_attn",
 )
+EXPECTED_MODELS = ("MLP", *GRAPH_MODELS)
 
 
 @pytest.mark.gnn
@@ -28,7 +29,7 @@ def test_all_builtin_models_share_one_forward_contract() -> None:
     edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]])
     edge_type = torch.tensor([0, 1, 0, 1])
 
-    for name in EXPECTED_MODELS:
+    for name in GRAPH_MODELS:
         kwargs = {
             "input_dim": 8,
             "hidden_dim": 6,
@@ -41,6 +42,11 @@ def test_all_builtin_models_share_one_forward_contract() -> None:
         classifier = NodeClassifier(encoder, num_classes=3)
         logits = classifier(x, edge_index, edge_type, relation_x)
         assert logits.shape == (5, 3), name
+
+    mlp = build_model(
+        "MLP", input_dim=8, hidden_dim=6, num_classes=3, dropout=0.0
+    )
+    assert mlp(x).shape == (5, 3)
 
 
 @pytest.mark.gnn

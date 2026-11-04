@@ -78,6 +78,96 @@ def test_get_data_builds_deterministic_pyg_bundle(tmp_path: Path) -> None:
 
 
 @pytest.mark.gnn
+def test_get_no_graph_data_reads_only_gold_standard_and_split(tmp_path: Path) -> None:
+    data_root = make_dataset(tmp_path)
+    graph_path = data_root / "example" / "graphs" / "tdg" / "default.json"
+    graph_path.unlink()
+    bench = TDGBench(data_root)
+
+    bundle = bench.get_no_graph_data("example", feature_dim=8, feature_seed=7)
+
+    assert bundle.graph == "no_graph"
+    assert bundle.variant == "none"
+    assert bundle.artifact is None
+    assert bundle.index_to_node == ("alpha", "beta", "gamma")
+    assert bundle.data.num_nodes == 3
+    assert bundle.data.num_edges == 0
+    assert bundle.data.num_relations == 0
+    assert bundle.split_sizes == {"train": 1, "validation": 1, "test": 1}
+
+
+@pytest.mark.gnn
+def test_evaluate_mlp_requires_no_graph(tmp_path: Path) -> None:
+    bench = TDGBench(make_dataset(tmp_path))
+    result = bench.evaluate(
+        "example",
+        model="MLP",
+        feature_dim=8,
+        hidden_dim=8,
+        max_epochs=2,
+        patience=1,
+        device="cpu",
+    )
+    assert result.model == "MLP"
+    assert result.graph == "no_graph"
+    assert result.training_mode == "full_batch"
+
+    with pytest.raises(ValueError, match="does not accept a graph"):
+        bench.evaluate("example", "tdg", model="MLP")
+
+
+@pytest.mark.gnn
+def test_unified_mlp_uses_common_nodes_without_graph(tmp_path: Path) -> None:
+    data_root = make_dataset(tmp_path)
+    (data_root / "example" / "graphs" / "tdg" / "default.json").unlink()
+    bench = TDGBench(data_root)
+
+    result = bench.unified_evaluation(
+        dataset="example",
+        model="MLP",
+        hidden_dims=[8],
+        split_seeds=[42],
+        training_seeds=[1],
+        feature_dim=8,
+        max_epochs=1,
+        patience=1,
+        device="cpu",
+        persist=False,
+        verbose=False,
+    )
+
+    assert result.graph == "no_graph"
+    assert result.model == "MLP"
+    assert result.runs[0].training_mode == "full_batch"
+    assert result.runs[0].num_neighbors == ()
+
+
+@pytest.mark.gnn
+def test_unified_suite_combines_graph_model_and_no_graph_mlp(tmp_path: Path) -> None:
+    bench = TDGBench(make_dataset(tmp_path))
+    suite = bench.unified_evaluation(
+        dataset="example",
+        graph="tdg",
+        models=["GCN", "MLP"],
+        hidden_dims=[8],
+        split_seeds=[42],
+        training_seeds=[1],
+        feature_dim=8,
+        num_neighbors=[-1, -1],
+        max_epochs=1,
+        patience=1,
+        device="cpu",
+        persist=False,
+        verbose=False,
+    )
+
+    assert suite.graph == "tdg"
+    assert suite.results["GCN"].runs[0].training_mode == "neighbor_sampling"
+    assert suite.results["MLP"].graph == "no_graph"
+    assert suite.results["MLP"].runs[0].training_mode == "full_batch"
+
+
+@pytest.mark.gnn
 def test_get_data_rejects_same_node_in_multiple_partitions(tmp_path: Path) -> None:
     bench = TDGBench(make_dataset(tmp_path, leaking_duplicate=True))
     with pytest.raises(DataValidationError, match="same graph node"):

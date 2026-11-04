@@ -156,11 +156,12 @@ class UnifiedEvaluationSuite:
 def _dataframe(rows: list[dict[str, Any]]):
     try:
         import pandas as pd
-    except ImportError as exc:  # pragma: no cover - notebook extra guard
+    except ImportError as exc:  # pragma: no cover - broken installation guard
         from tdg_bench.exceptions import OptionalDependencyError
 
         raise OptionalDependencyError(
-            "DataFrame exports require pandas. Install tdg-bench[notebook]."
+            "DataFrame exports require pandas. "
+            "Reinstall with: pip install --upgrade tdg-bench"
         ) from exc
     return pd.DataFrame(rows)
 
@@ -358,6 +359,14 @@ def _atomic_json_write(path: Path, value: object) -> None:
 
 
 def _graph_identity(bundle) -> str:
+    if bundle.artifact is None:
+        return _fingerprint(
+            {
+                "dataset": bundle.dataset,
+                "terms": bundle.gold_standard.terms,
+                "labels": bundle.gold_standard.labels,
+            }
+        )
     asset = bundle.artifact.asset
     if asset.sha256 is not None:
         return asset.sha256
@@ -563,6 +572,7 @@ def _prepare_unified_data(
     embedding_cache_dir: str | Path | None = None,
     strict_coverage: bool = True,
     verify_graph: bool = False,
+    no_graph: bool = False,
 ) -> _PreparedUnifiedData:
     manifest = benchmark._store.manifest(dataset)
     resolved_split_seeds = (
@@ -579,25 +589,39 @@ def _prepare_unified_data(
     for split_seed in resolved_split_seeds:
         benchmark._store.ensure_asset(manifest.splits[split_seed])
     first_split = resolved_split_seeds[0]
-    base_bundle = benchmark.get_data(
-        dataset,
-        graph,
-        graph_path=graph_path,
-        graph_name=graph_name,
-        split_seed=first_split,
-        variant=variant,
-        options=options,
-        feature_dim=feature_dim,
-        initial_embedding_model=initial_embedding_model,
-        embedding_batch_size=embedding_batch_size,
-        embedding_device=embedding_device,
-        embedding_cache=embedding_cache,
-        embedding_progress=embedding_progress,
-        embedding_cache_dir=embedding_cache_dir,
-        feature_seed=feature_seed,
-        strict_coverage=strict_coverage,
-        verify_graph=verify_graph,
-    )
+    if no_graph:
+        base_bundle = benchmark.get_no_graph_data(
+            dataset,
+            split_seed=first_split,
+            feature_dim=feature_dim,
+            initial_embedding_model=initial_embedding_model,
+            embedding_batch_size=embedding_batch_size,
+            embedding_device=embedding_device,
+            embedding_cache=embedding_cache,
+            embedding_progress=embedding_progress,
+            embedding_cache_dir=embedding_cache_dir,
+            feature_seed=feature_seed,
+        )
+    else:
+        base_bundle = benchmark.get_data(
+            dataset,
+            graph,
+            graph_path=graph_path,
+            graph_name=graph_name,
+            split_seed=first_split,
+            variant=variant,
+            options=options,
+            feature_dim=feature_dim,
+            initial_embedding_model=initial_embedding_model,
+            embedding_batch_size=embedding_batch_size,
+            embedding_device=embedding_device,
+            embedding_cache=embedding_cache,
+            embedding_progress=embedding_progress,
+            embedding_cache_dir=embedding_cache_dir,
+            feature_seed=feature_seed,
+            strict_coverage=strict_coverage,
+            verify_graph=verify_graph,
+        )
     bundles = {
         split_seed: (
             base_bundle
@@ -671,6 +695,12 @@ def run_unified_evaluation(
         training_seeds, "training_seeds"
     )
     resolved_num_neighbors = tuple(num_neighbors)
+    no_graph = isinstance(model, str) and model == "MLP"
+    effective_dropout = (
+        float(dict(model_kwargs or {}).get("dropout", 0.0))
+        if no_graph
+        else dropout
+    )
     prepared_data = _prepared_data or _prepare_unified_data(
         benchmark,
         dataset=dataset,
@@ -690,6 +720,7 @@ def run_unified_evaluation(
         embedding_cache_dir=embedding_cache_dir,
         strict_coverage=strict_coverage,
         verify_graph=verify_graph,
+        no_graph=no_graph,
     )
     resolved_split_seeds = prepared_data.split_seeds
     metric_names = resolve_metric_names(metrics)
@@ -714,14 +745,14 @@ def run_unified_evaluation(
         "feature_seed": feature_seed,
         "feature_dim": int(base_bundle.data.x.size(1)),
         "num_layers": num_layers,
-        "dropout": dropout,
+        "dropout": effective_dropout,
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
-        "training_mode": "neighbor_sampling",
-        "batch_size": batch_size,
-        "num_neighbors": resolved_num_neighbors,
-        "shuffle": shuffle,
-        "num_workers": num_workers,
+        "training_mode": "full_batch" if no_graph else "neighbor_sampling",
+        "batch_size": 0 if no_graph else batch_size,
+        "num_neighbors": () if no_graph else resolved_num_neighbors,
+        "shuffle": False if no_graph else shuffle,
+        "num_workers": 0 if no_graph else num_workers,
         "max_epochs": max_epochs,
         "patience": patience,
         "min_delta": min_delta,
@@ -789,7 +820,7 @@ def run_unified_evaluation(
                     copy.deepcopy(model),
                     hidden_dim=hidden_dim,
                     num_layers=num_layers,
-                    dropout=dropout,
+                    dropout=effective_dropout,
                     learning_rate=learning_rate,
                     weight_decay=weight_decay,
                     batch_size=batch_size,
@@ -987,11 +1018,26 @@ def run_unified_suite(
         for name, value in normalized_kwargs.items()
         if name in preparation_names
     }
-    prepared_data = _prepare_unified_data(
-        benchmark,
-        dataset=dataset,
-        graph=graph,
-        **preparation_kwargs,
+    graph_prepared = (
+        _prepare_unified_data(
+            benchmark,
+            dataset=dataset,
+            graph=graph,
+            **preparation_kwargs,
+        )
+        if any(label != "MLP" for label in labels)
+        else None
+    )
+    no_graph_prepared = (
+        _prepare_unified_data(
+            benchmark,
+            dataset=dataset,
+            graph=None,
+            no_graph=True,
+            **preparation_kwargs,
+        )
+        if "MLP" in labels
+        else None
     )
 
     results: dict[str, UnifiedEvaluationResult] = {}
@@ -1004,9 +1050,11 @@ def run_unified_suite(
         results[label] = run_unified_evaluation(
             benchmark,
             dataset=dataset,
-            graph=graph,
+            graph=None if label == "MLP" else graph,
             model=model,
-            _prepared_data=prepared_data,
+            _prepared_data=(
+                no_graph_prepared if label == "MLP" else graph_prepared
+            ),
             **normalized_kwargs,
         )
 
@@ -1021,7 +1069,10 @@ def run_unified_suite(
         if lower_is_better
         else max(validation_scores, key=lambda label: validation_scores[label])
     )
-    first = next(iter(results.values()))
+    reference_label = next(
+        (label for label in labels if label != "MLP"), labels[0]
+    )
+    first = results[reference_label]
     suite = UnifiedEvaluationSuite(
         dataset=dataset,
         graph=first.graph,

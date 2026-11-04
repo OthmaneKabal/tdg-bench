@@ -16,10 +16,10 @@ try:
     import torch
     from openpyxl import load_workbook
     from torch_geometric.data import Data
-except ImportError as exc:  # pragma: no cover - exercised in minimal installations
+except ImportError as exc:  # pragma: no cover - broken installation guard
     raise OptionalDependencyError(
-        "get_data() requires the GNN dependencies. Install them with: "
-        "pip install 'tdg-bench[gnn]'"
+        "get_data() requires PyTorch, PyTorch Geometric and openpyxl. "
+        "Reinstall them with: pip install --upgrade tdg-bench"
     ) from exc
 
 
@@ -39,7 +39,7 @@ class DataBundle:
     graph: str
     variant: str
     split_seed: int
-    artifact: GraphArtifact
+    artifact: GraphArtifact | None
     data: Any
     node_to_index: dict[str, int]
     index_to_node: tuple[str, ...]
@@ -307,6 +307,71 @@ def build_data_bundle(
         gold_standard=gold,
         gold_to_node=gold_to_node,
         missing_gold_terms=missing_terms,
+    )
+
+
+def build_no_graph_bundle(
+    *,
+    dataset: str,
+    gold_standard_asset: Asset,
+    split_asset: Asset,
+    split_seed: int,
+    feature_dim: int = 384,
+    random_seed: int = 42,
+) -> DataBundle:
+    """Build a feature-only bundle from common nodes, labels and one split."""
+    if feature_dim < 1:
+        raise ValueError("feature_dim must be >= 1")
+    gold = _load_gold_standard(gold_standard_asset.path)
+    if len(gold.terms) != len(set(gold.terms)):
+        raise DataValidationError(
+            "The no-graph baseline requires unique Gold Standard terms"
+        )
+
+    nodes = gold.terms
+    node_to_index = {node: index for index, node in enumerate(nodes)}
+    gold_to_node = tuple(range(len(nodes)))
+    label_names = tuple(sorted(set(gold.labels)))
+    label_to_index = {label: index for index, label in enumerate(label_names)}
+    y = torch.tensor(
+        [label_to_index[label] for label in gold.labels], dtype=torch.long
+    )
+    masks = _build_split_masks(
+        split_asset=split_asset,
+        gold=gold,
+        gold_to_node=gold_to_node,
+        num_nodes=len(nodes),
+    )
+    generator = torch.Generator(device="cpu").manual_seed(random_seed)
+    data = Data(
+        x=torch.rand(
+            (len(nodes), feature_dim), generator=generator, dtype=torch.float32
+        ),
+        edge_index=torch.empty((2, 0), dtype=torch.long),
+        edge_type=torch.empty((0,), dtype=torch.long),
+        y=y,
+        train_mask=masks["train_idx"],
+        val_mask=masks["val_idx"],
+        test_mask=masks["test_idx"],
+    )
+    data.relation_x = torch.empty((0, feature_dim), dtype=torch.float32)
+    data.num_classes = len(label_names)
+    data.num_relations = 0
+    return DataBundle(
+        dataset=dataset,
+        graph="no_graph",
+        variant="none",
+        split_seed=split_seed,
+        artifact=None,
+        data=data,
+        node_to_index=node_to_index,
+        index_to_node=nodes,
+        relation_to_index={},
+        index_to_relation=(),
+        label_names=label_names,
+        gold_standard=gold,
+        gold_to_node=gold_to_node,
+        missing_gold_terms=(),
     )
 
 

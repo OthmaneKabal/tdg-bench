@@ -3,6 +3,7 @@
 from tdg_bench.data_preparation.builder import (
     DataBundle,
     build_data_bundle,
+    build_no_graph_bundle,
     replace_bundle_random_features,
     replace_bundle_split,
 )
@@ -20,6 +21,7 @@ from tdg_bench.data_preparation.biomed_curated import (
 __all__ = [
     "DataBundle",
     "build_data_bundle",
+    "build_no_graph_bundle",
     "replace_bundle_random_features",
     "replace_bundle_split",
     "DEFAULT_SENTENCE_BERT",

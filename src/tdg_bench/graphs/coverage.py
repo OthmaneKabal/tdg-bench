@@ -49,9 +49,10 @@ class GraphCoverageReport:
 def _load_common_nodes(path: Path) -> tuple[str, ...]:
     try:
         from openpyxl import load_workbook
-    except ImportError as exc:  # pragma: no cover - optional dependency guard
+    except ImportError as exc:  # pragma: no cover - broken installation guard
         raise OptionalDependencyError(
-            "Checking graph coverage requires openpyxl. Install tdg-bench[gnn]."
+            "Checking graph coverage requires openpyxl. "
+            "Reinstall with: pip install --upgrade tdg-bench"
         ) from exc
 
     workbook = load_workbook(path, read_only=True, data_only=True)

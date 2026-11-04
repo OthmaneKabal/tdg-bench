@@ -10,12 +10,12 @@ try:
     from torch.nn import functional as F
     from torch_geometric.nn import GATConv, GCNConv, RGCNConv
     from torch_geometric.utils import scatter, softmax
-except ImportError as exc:  # pragma: no cover - optional dependency guard
+except ImportError as exc:  # pragma: no cover - broken installation guard
     from tdg_bench.exceptions import OptionalDependencyError
 
     raise OptionalDependencyError(
-        "Built-in models require the GNN dependencies. Install them with: "
-        "pip install 'tdg-bench[gnn]'"
+        "Built-in models require PyTorch and PyTorch Geometric. "
+        "Reinstall them with: pip install --upgrade tdg-bench"
     ) from exc
 
 
@@ -28,6 +28,30 @@ def _validate_dimensions(
         raise ValueError("num_layers must be >= 1")
     if not 0.0 <= dropout < 1.0:
         raise ValueError("dropout must be in [0, 1)")
+
+
+class NoGraphMLP(nn.Module):
+    """One-hidden-layer feature-only baseline from the original benchmark."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        num_classes: int,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if min(input_dim, hidden_dim, num_classes) < 1:
+            raise ValueError("input_dim, hidden_dim and num_classes must be >= 1")
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError("dropout must be in [0, 1)")
+        self.input_layer = nn.Linear(input_dim, hidden_dim)
+        self.activation = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(hidden_dim, num_classes)
+
+    def forward(self, x):
+        return self.classifier(self.dropout(self.activation(self.input_layer(x))))
 
 
 class GCNEncoder(nn.Module):

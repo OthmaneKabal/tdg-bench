@@ -106,7 +106,9 @@ def test_evaluate_custom_model_factory() -> None:
 
 
 @pytest.mark.gnn
-@pytest.mark.parametrize("model_name", available_model_names())
+@pytest.mark.parametrize(
+    "model_name", tuple(name for name in available_model_names() if name != "MLP")
+)
 def test_every_builtin_model_supports_neighbor_sampled_batches(model_name) -> None:
     result = evaluate_bundle(
         tiny_bundle(),
@@ -123,6 +125,28 @@ def test_every_builtin_model_supports_neighbor_sampled_batches(model_name) -> No
     assert result.training_mode == "neighbor_sampling"
     assert result.batch_size == 2
     assert result.num_neighbors == (-1, -1)
+
+
+@pytest.mark.gnn
+def test_mlp_uses_full_batch_and_ignores_edges() -> None:
+    bundle = tiny_bundle()
+    bundle.label_names = ("class-0", "class-1")
+    result = evaluate_bundle(
+        bundle,
+        "MLP",
+        hidden_dim=8,
+        max_epochs=2,
+        patience=1,
+        random_seed=13,
+        device="cpu",
+        track_training=True,
+    )
+    assert result.model == "MLP"
+    assert result.graph == "no_graph"
+    assert result.training_mode == "full_batch"
+    assert result.batch_size == 0
+    assert result.num_neighbors == ()
+    assert len(result.history) == result.epochs_ran
 
 
 @pytest.mark.gnn

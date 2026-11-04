@@ -113,7 +113,7 @@ class TDGBench:
         return self._store.corpus(dataset, corpus, verify=verify)
 
     def available_models(self) -> tuple[str, ...]:
-        """Return the stable names of built-in GNN encoders."""
+        """Return the stable names of built-in graph and no-graph models."""
         from tdg_bench.models import available_model_names
 
         return available_model_names()
@@ -348,6 +348,63 @@ class TDGBench:
             )
         return bundle
 
+    def get_no_graph_data(
+        self,
+        dataset: str,
+        *,
+        split_seed: int = 42,
+        feature_dim: int = 384,
+        initial_embedding_model: str | None = None,
+        embedding_batch_size: int = 256,
+        embedding_device: str = "auto",
+        embedding_cache: bool = True,
+        embedding_progress: bool = True,
+        embedding_cache_dir: str | Path | None = None,
+        random_seed: int = 42,
+        feature_seed: int | None = None,
+    ):
+        """Prepare common nodes, labels and a split without reading a graph."""
+        manifest = self._store.manifest(dataset)
+        if split_seed not in manifest.splits:
+            available = ", ".join(str(seed) for seed in sorted(manifest.splits))
+            raise ValueError(
+                f"Unknown split_seed={split_seed} for dataset {dataset!r}. "
+                f"Available seeds: {available}."
+            )
+        self._store.ensure_asset(manifest.gold_standard)
+        self._store.ensure_asset(manifest.splits[split_seed])
+        from tdg_bench.data_preparation.builder import build_no_graph_bundle
+
+        resolved_feature_seed = random_seed if feature_seed is None else feature_seed
+        bundle = build_no_graph_bundle(
+            dataset=dataset,
+            gold_standard_asset=manifest.gold_standard,
+            split_asset=manifest.splits[split_seed],
+            split_seed=split_seed,
+            feature_dim=feature_dim,
+            random_seed=resolved_feature_seed,
+        )
+        if initial_embedding_model is not None:
+            from tdg_bench.data_preparation.embeddings import (
+                with_sentence_transformer_features,
+            )
+
+            cache_dir = (
+                Path(embedding_cache_dir)
+                if embedding_cache_dir is not None
+                else self.data_root / ".cache" / "embeddings"
+            )
+            bundle = with_sentence_transformer_features(
+                bundle,
+                initial_embedding_model=initial_embedding_model,
+                cache_dir=cache_dir,
+                batch_size=embedding_batch_size,
+                device=embedding_device,
+                use_cache=embedding_cache,
+                show_progress=embedding_progress,
+            )
+        return bundle
+
     def evaluate(
         self,
         dataset: str,
@@ -391,26 +448,45 @@ class TDGBench:
         verbose: bool = False,
         log_every: int = 10,
     ):
-        """Train and evaluate one built-in or custom GNN on one fixed split."""
-        bundle = self.get_data(
-            dataset,
-            graph,
-            graph_path=graph_path,
-            graph_name=graph_name,
-            split_seed=split_seed,
-            variant=variant,
-            options=options,
-            feature_dim=feature_dim,
-            initial_embedding_model=initial_embedding_model,
-            embedding_batch_size=embedding_batch_size,
-            embedding_device=embedding_device,
-            embedding_cache=embedding_cache,
-            embedding_progress=embedding_progress,
-            embedding_cache_dir=embedding_cache_dir,
-            feature_seed=feature_seed,
-            strict_coverage=strict_coverage,
-            verify_graph=verify_graph,
-        )
+        """Train and evaluate one built-in or custom model on one fixed split."""
+        no_graph = isinstance(model, str) and model == "MLP"
+        if no_graph:
+            if graph is not None or graph_path is not None or graph_name is not None:
+                raise ValueError("model='MLP' does not accept a graph")
+            if options is not None and tuple(options):
+                raise ValueError("model='MLP' does not accept graph preprocessing options")
+            bundle = self.get_no_graph_data(
+                dataset,
+                split_seed=split_seed,
+                feature_dim=feature_dim,
+                initial_embedding_model=initial_embedding_model,
+                embedding_batch_size=embedding_batch_size,
+                embedding_device=embedding_device,
+                embedding_cache=embedding_cache,
+                embedding_progress=embedding_progress,
+                embedding_cache_dir=embedding_cache_dir,
+                feature_seed=feature_seed,
+            )
+        else:
+            bundle = self.get_data(
+                dataset,
+                graph,
+                graph_path=graph_path,
+                graph_name=graph_name,
+                split_seed=split_seed,
+                variant=variant,
+                options=options,
+                feature_dim=feature_dim,
+                initial_embedding_model=initial_embedding_model,
+                embedding_batch_size=embedding_batch_size,
+                embedding_device=embedding_device,
+                embedding_cache=embedding_cache,
+                embedding_progress=embedding_progress,
+                embedding_cache_dir=embedding_cache_dir,
+                feature_seed=feature_seed,
+                strict_coverage=strict_coverage,
+                verify_graph=verify_graph,
+            )
         from tdg_bench.evaluation import evaluate_bundle
 
         return evaluate_bundle(
@@ -470,7 +546,11 @@ class TDGBench:
         for split_seed in selected_splits:
             self._store.ensure_asset(manifest.splits[split_seed])
 
-        data_parameter_names = set(inspect.signature(self.get_data).parameters)
+        no_graph = isinstance(model, str) and model == "MLP"
+        if no_graph and graph is not None:
+            raise ValueError("model='MLP' does not accept a graph")
+        data_loader = self.get_no_graph_data if no_graph else self.get_data
+        data_parameter_names = set(inspect.signature(data_loader).parameters)
         data_parameter_names -= {"self", "dataset", "graph", "split_seed", "random_seed"}
         data_kwargs = {
             name: value for name, value in kwargs.items() if name in data_parameter_names
@@ -479,11 +559,19 @@ class TDGBench:
             name: value for name, value in kwargs.items() if name not in data_parameter_names
         }
         first_split = selected_splits[0]
-        base_bundle = self.get_data(
-            dataset,
-            graph,
-            split_seed=first_split,
-            **data_kwargs,
+        base_bundle = (
+            self.get_no_graph_data(
+                dataset,
+                split_seed=first_split,
+                **data_kwargs,
+            )
+            if no_graph
+            else self.get_data(
+                dataset,
+                graph,
+                split_seed=first_split,
+                **data_kwargs,
+            )
         )
 
         from tdg_bench.evaluation import aggregate_results, evaluate_bundle

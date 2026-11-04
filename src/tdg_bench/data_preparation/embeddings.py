@@ -14,9 +14,9 @@ from tdg_bench.data_preparation.builder import DataBundle
 
 try:
     import torch
-except ImportError as exc:  # pragma: no cover - guarded by the GNN extra
+except ImportError as exc:  # pragma: no cover - broken installation guard
     raise OptionalDependencyError(
-        "Text embeddings require PyTorch. Install: pip install 'tdg-bench[gnn,sentence-bert]'"
+        "Text embeddings require PyTorch. Reinstall with: pip install --upgrade tdg-bench"
     ) from exc
 
 
@@ -26,10 +26,10 @@ DEFAULT_SENTENCE_BERT = "sentence-transformers/all-MiniLM-L6-v2"
 def _load_encoder(initial_embedding_model: str, device: str):
     try:
         from sentence_transformers import SentenceTransformer
-    except ImportError as exc:  # pragma: no cover - optional dependency guard
+    except ImportError as exc:  # pragma: no cover - broken installation guard
         raise OptionalDependencyError(
-            "Sentence-BERT features require sentence-transformers. Install: "
-            "pip install 'tdg-bench[sentence-bert]'"
+            "Sentence-BERT features require sentence-transformers. "
+            "Reinstall with: pip install --upgrade tdg-bench"
         ) from exc
     try:
         return SentenceTransformer(
@@ -165,13 +165,17 @@ def with_sentence_transformer_features(
             convert_to_tensor=True,
             normalize_embeddings=False,
         ).detach().cpu().to(torch.float32).contiguous()
-        relation_features = encoder.encode(
-            list(bundle.index_to_relation),
-            batch_size=batch_size,
-            show_progress_bar=show_progress,
-            convert_to_tensor=True,
-            normalize_embeddings=False,
-        ).detach().cpu().to(torch.float32).contiguous()
+        relation_features = (
+            encoder.encode(
+                list(bundle.index_to_relation),
+                batch_size=batch_size,
+                show_progress_bar=show_progress,
+                convert_to_tensor=True,
+                normalize_embeddings=False,
+            ).detach().cpu().to(torch.float32).contiguous()
+            if bundle.index_to_relation
+            else torch.empty((0, node_features.size(1)), dtype=torch.float32)
+        )
         if node_features.size(1) != relation_features.size(1):
             raise DataValidationError(
                 "Node and relation embeddings have different dimensions"

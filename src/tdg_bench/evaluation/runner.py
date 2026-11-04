@@ -17,12 +17,12 @@ try:
     from torch.nn import functional as F
     from torch_geometric.nn import MessagePassing
     from torch_geometric.loader import NeighborLoader
-except ImportError as exc:  # pragma: no cover - optional dependency guard
+except ImportError as exc:  # pragma: no cover - broken installation guard
     from tdg_bench.exceptions import OptionalDependencyError
 
     raise OptionalDependencyError(
-        "Evaluation requires the GNN dependencies. Install them with: "
-        "pip install 'tdg-bench[gnn]'"
+        "Evaluation requires PyTorch and PyTorch Geometric. "
+        "Reinstall them with: pip install --upgrade tdg-bench"
     ) from exc
 
 from tdg_bench.data_preparation.builder import DataBundle
@@ -207,6 +207,17 @@ def _prepare_model(
         **dict(model_kwargs or {}),
     }
     if isinstance(model, str):
+        if model == "MLP":
+            mlp_options = dict(model_kwargs or {})
+            mlp_dropout = mlp_options.pop("dropout", 0.0)
+            mlp_arguments = {
+                "input_dim": common["input_dim"],
+                "hidden_dim": hidden_dim,
+                "num_classes": common["num_classes"],
+                "dropout": mlp_dropout,
+                **mlp_options,
+            }
+            return build_model(model, **mlp_arguments), model
         encoder_arguments = dict(common)
         encoder_arguments.pop("num_classes")
         if model != "RGCN":
@@ -426,6 +437,167 @@ def _metrics(
     )
 
 
+def _evaluate_no_graph_mlp(
+    bundle: DataBundle,
+    *,
+    hidden_dim: int,
+    dropout: float,
+    learning_rate: float,
+    weight_decay: float,
+    max_epochs: int,
+    patience: int,
+    min_delta: float,
+    random_seed: int,
+    device: str | torch.device,
+    model_kwargs: Mapping[str, Any] | None,
+    metric_names: tuple[str, ...],
+    selection_metric: str,
+    class_wise: bool,
+    track_training: bool,
+    verbose: bool,
+    log_every: int,
+) -> EvaluationResult:
+    """Train the historical feature-only MLP without graph sampling."""
+    _set_random_seed(random_seed)
+    resolved_device = _resolve_device(device)
+    network, model_name = _prepare_model(
+        "MLP",
+        bundle,
+        hidden_dim=hidden_dim,
+        num_layers=1,
+        dropout=dropout,
+        model_kwargs=model_kwargs,
+    )
+    network = network.to(resolved_device)
+    data = bundle.data.clone().to(resolved_device)
+    optimizer = torch.optim.Adam(
+        network.parameters(), lr=learning_rate, weight_decay=weight_decay
+    )
+    label_names = bundle.label_names
+
+    def evaluate_mask(mask, names: tuple[str, ...]) -> ClassificationMetrics:
+        network.eval()
+        with torch.no_grad():
+            logits = network(data.x)
+        return _metrics(
+            logits,
+            data.y,
+            mask,
+            metric_names=names,
+            label_names=label_names,
+            class_wise=class_wise,
+        )
+
+    lower_is_better = selection_metric == "log_loss"
+    best_score = math.inf if lower_is_better else -math.inf
+    best_epoch = 0
+    best_state: dict[str, torch.Tensor] | None = None
+    stale_epochs = 0
+    history: list[EpochMetrics] = []
+    epochs_ran = 0
+    if verbose:
+        print(
+            f"Training MLP | dataset={bundle.dataset} | graph=none | "
+            f"split={bundle.split_seed} | device={resolved_device} | "
+            f"features={getattr(bundle, 'initial_embedding_model', None) or 'random'}",
+            flush=True,
+        )
+    for epoch in range(1, max_epochs + 1):
+        network.train()
+        optimizer.zero_grad(set_to_none=True)
+        logits = network(data.x)
+        loss = F.cross_entropy(logits[data.train_mask], data.y[data.train_mask])
+        loss.backward()
+        optimizer.step()
+        train_loss = float(loss.detach())
+        train_at_epoch = (
+            evaluate_mask(data.train_mask, metric_names) if track_training else None
+        )
+        validation = evaluate_mask(
+            data.val_mask,
+            metric_names if track_training else (selection_metric,),
+        )
+        selection_score = validation.values[selection_metric]
+        if math.isnan(selection_score):
+            raise ValueError(
+                f"selection_metric={selection_metric!r} is undefined on the validation split"
+            )
+        epochs_ran = epoch
+        if track_training:
+            history.append(
+                EpochMetrics(
+                    epoch=epoch,
+                    train_loss=train_loss,
+                    validation_loss=validation.loss,
+                    validation_accuracy=validation.accuracy,
+                    validation_macro_f1=validation.macro_f1,
+                    selection_metric=selection_metric,
+                    selection_score=selection_score,
+                    train_accuracy=train_at_epoch.accuracy,
+                    train_macro_f1=train_at_epoch.macro_f1,
+                    train_values=dict(train_at_epoch.values),
+                    validation_values=dict(validation.values),
+                )
+            )
+        improved = (
+            selection_score < best_score - min_delta
+            if lower_is_better
+            else selection_score > best_score + min_delta
+        )
+        if improved:
+            best_score = selection_score
+            best_epoch = epoch
+            best_state = {
+                name: value.detach().cpu().clone()
+                for name, value in network.state_dict().items()
+            }
+            stale_epochs = 0
+        else:
+            stale_epochs += 1
+        stopping = stale_epochs >= patience
+        if verbose and (epoch == 1 or epoch % log_every == 0 or stopping):
+            print(
+                f"epoch={epoch:03d} | train_loss={train_loss:.4f} | "
+                f"val_loss={validation.loss:.4f} | "
+                f"val_macro_f1={validation.macro_f1:.4f} | "
+                f"stale={stale_epochs}/{patience}",
+                flush=True,
+            )
+        if stopping:
+            break
+
+    if best_state is None:
+        raise RuntimeError("Training did not produce a model state")
+    network.load_state_dict(best_state)
+    train_metrics = evaluate_mask(data.train_mask, metric_names)
+    validation_metrics = evaluate_mask(data.val_mask, metric_names)
+    test_metrics = evaluate_mask(data.test_mask, metric_names)
+    return EvaluationResult(
+        dataset=bundle.dataset,
+        graph="no_graph",
+        variant="none",
+        model=model_name,
+        initial_embedding_model=getattr(bundle, "initial_embedding_model", None),
+        split_seed=bundle.split_seed,
+        random_seed=random_seed,
+        device=str(resolved_device),
+        best_epoch=best_epoch,
+        epochs_ran=epochs_ran,
+        metric_names=metric_names,
+        selection_metric=selection_metric,
+        class_wise=class_wise,
+        training_mode="full_batch",
+        batch_size=0,
+        num_neighbors=(),
+        shuffle=False,
+        track_training=track_training,
+        train=train_metrics,
+        validation=validation_metrics,
+        test=test_metrics,
+        history=tuple(history),
+    )
+
+
 def evaluate_bundle(
     bundle: DataBundle,
     model: str | nn.Module | Callable[..., nn.Module] = "GCN",
@@ -465,17 +637,40 @@ def evaluate_bundle(
         raise ValueError("patience must be >= 1")
     if learning_rate <= 0:
         raise ValueError("learning_rate must be > 0")
-    if batch_size < 1:
+    no_graph_mlp = isinstance(model, str) and model == "MLP"
+    if not no_graph_mlp and batch_size < 1:
         raise ValueError("batch_size must be >= 1")
     if num_workers < 0:
         raise ValueError("num_workers must be >= 0")
     if log_every < 1:
         raise ValueError("log_every must be >= 1")
+    metric_names = resolve_metric_names(metrics)
+    selection_metric = normalize_metric_name(selection_metric)
+
+    if no_graph_mlp:
+        return _evaluate_no_graph_mlp(
+            bundle,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            max_epochs=max_epochs,
+            patience=patience,
+            min_delta=min_delta,
+            random_seed=random_seed,
+            device=device,
+            model_kwargs=model_kwargs,
+            metric_names=metric_names,
+            selection_metric=selection_metric,
+            class_wise=class_wise,
+            track_training=track_training,
+            verbose=verbose,
+            log_every=log_every,
+        )
+
     resolved_num_neighbors = _resolve_num_neighbors(
         num_neighbors, num_layers=num_layers
     )
-    metric_names = resolve_metric_names(metrics)
-    selection_metric = normalize_metric_name(selection_metric)
 
     _set_random_seed(random_seed)
     resolved_device = _resolve_device(device)
